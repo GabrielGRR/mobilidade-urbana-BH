@@ -6,7 +6,6 @@ dist/
 wheels/
 *.egg-info
 rules.txt
-architecture.md
 
 # Virtual environments
 .venv
