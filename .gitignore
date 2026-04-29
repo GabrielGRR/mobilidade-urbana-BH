@@ -7,5 +7,7 @@ wheels/
 *.egg-info
 rules.txt
 
+data/
+
 # Virtual environments
 .venv
