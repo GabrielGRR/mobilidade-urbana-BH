@@ -1,9 +1,10 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timezone, timedelta
 import urllib.request
-import urllib.error
 import json
 import time
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
 from utils.logging_utils import setup_logging, get_logger
 from utils.decorators import retry
 
@@ -17,11 +18,11 @@ def extract_events():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     })
     
-    # Adicionando timeout de 10 segundos para blindar travamentos e permitir que o retry atue
     with urllib.request.urlopen(req, timeout=10) as response:
         data = json.loads(response.read().decode('utf-8'))
         
-        output_dir = Path("data/bronze")
+        # Caminho absoluto dentro do container do Airflow
+        output_dir = Path("/opt/airflow/data/bronze")
         output_dir.mkdir(parents=True, exist_ok=True)
         
         today = datetime.now().strftime("%Y-%m-%d")
@@ -49,14 +50,12 @@ def extract_events():
             
         logger.info(f"Sucesso! {new_records} novos registros adicionados.")
 
-def main():
+def poll_api_for_15_minutes():
     setup_logging()
-    
-    # Define a janela de execução (15 minutos para rodar seguro no Airflow)
     window_minutes = 15
     end_time = datetime.now() + timedelta(minutes=window_minutes)
     
-    logger.info(f"Iniciando ciclo de captura. O script rodará a cada 20s até {end_time.strftime('%H:%M:%S')}")
+    logger.info(f"Iniciando ciclo de captura no Airflow. Script rodará até {end_time.strftime('%H:%M:%S')}")
     
     while datetime.now() < end_time:
         cycle_start = time.time()
@@ -64,16 +63,34 @@ def main():
         try:
             extract_events()
         except Exception as e:
-            # Se a API cair por completo (mesmo após os 3 retries), ele cai aqui.
-            # O erro é reportado, mas não quebra o loop de 15 minutos do Airflow.
-            logger.exception("Falha catastrófica no ciclo atual. Pulando para o próximo em 20s...")
+            logger.exception("Falha na extração. Tentando novamente em 20s...")
         
-        # Calcula quanto tempo o script levou e dorme apenas o resto para fechar exatos 20s
         elapsed = time.time() - cycle_start
         sleep_time = max(0, 20 - elapsed)
         time.sleep(sleep_time)
         
-    logger.info("Ciclo de 15 minutos finalizado. O Airflow pode marcar a task como Sucesso.")
+    logger.info("Ciclo finalizado. Task do Airflow concluída com sucesso.")
 
-if __name__ == "__main__":
-    main()
+default_args = {
+    'owner': 'data_engineer',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=1),
+}
+
+with DAG(
+    'ingestion_pbh_events_bronze',
+    default_args=default_args,
+    description='Extrai posições de ônibus da PBH a cada 15 minutos e salva na camada Bronze',
+    schedule_interval=timedelta(minutes=15),
+    start_date=datetime(2026, 5, 1),
+    catchup=False, # Não rodar o passado retroativamente
+    tags=['ingestion', 'bronze', 'mobility'],
+) as dag:
+
+    extract_task = PythonOperator(
+        task_id='poll_api_15_min',
+        python_callable=poll_api_for_15_minutes,
+    )
