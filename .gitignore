@@ -1,11 +1,6 @@
 # Python-generated files
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-rules.txt
+data/bronze/
 
 
 # Virtual environments
